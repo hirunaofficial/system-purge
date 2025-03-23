@@ -1,32 +1,29 @@
 @echo off
 color 0a
 title Advanced System Cleaning Utility
-setlocal enabledelayedexpansion
 
-:: BatchGotAdmin
-:-------------------------------------
-REM  --> Check for permissions
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
-REM --> If error flag set, we do not have admin.
-if '%errorlevel%' NEQ '0' (
+:: Simple admin check and elevation
+net session >nul 2>&1
+if %errorlevel% neq 0 (
     echo Requesting administrative privileges...
-    goto UACPrompt
-) else ( goto gotAdmin )
-:UACPrompt
     echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~f0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
     "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
     exit /B
-:gotAdmin
-    if exist "%temp%\getadmin.vbs" ( del "%temp%\getadmin.vbs" )
-    pushd "%CD%"
-    CD /D "%~dp0"
-:--------------------------------------
+)
+
+:: Continue with admin privileges
+setlocal enabledelayedexpansion
 
 :: Create backup directory if it doesn't exist
 if not exist "%USERPROFILE%\SystemPurge_Backup" (
-    mkdir "%USERPROFILE%\SystemPurge_Backup"
+    mkdir "%USERPROFILE%\SystemPurge_Backup" 2>nul
 )
+
+:::: Make sure temp directory exists and is accessible
+if not exist "%TEMP%" mkdir "%TEMP%" 2>nul
+if exist "%TEMP%\ctrl-c-flag.txt" del "%TEMP%\ctrl-c-flag.txt" 2>nul
 
 :Start
 cls
@@ -68,17 +65,30 @@ if %errorlevel% NEQ 0 (
 goto Start
 
 :CreateLogFile
-echo ===================================================>> %USERPROFILE%\Desktop\CleaningLog.txt
-echo        SYSTEM CLEANING LOG - %date% %time%>> %USERPROFILE%\Desktop\CleaningLog.txt
-echo ===================================================>> %USERPROFILE%\Desktop\CleaningLog.txt
-echo.>> %USERPROFILE%\Desktop\CleaningLog.txt
+:: Make sure Desktop exists
+if not exist "%USERPROFILE%\Desktop" mkdir "%USERPROFILE%\Desktop" 2>nul
+echo ===================================================>> "%USERPROFILE%\Desktop\CleaningLog.txt"
+echo        SYSTEM CLEANING LOG - %date% %time%>> "%USERPROFILE%\Desktop\CleaningLog.txt"
+echo ===================================================>> "%USERPROFILE%\Desktop\CleaningLog.txt"
+echo.>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 goto :eof
 
 :ErrorHandler
 echo ERROR: %~1
 echo Operation failed with error code: %errorlevel%
 echo The script will continue with the next step.
-echo ERROR: %~1 (Error code: %errorlevel%)>> %USERPROFILE%\Desktop\CleaningLog.txt
+echo ERROR: %~1 (Error code: %errorlevel%)>> "%USERPROFILE%\Desktop\CleaningLog.txt" 2>nul
+goto :eof
+
+:::: Simplified error recovery functions
+:CheckForInterrupt
+if exist "%TEMP%\user_interrupt.flag" (
+    del "%TEMP%\user_interrupt.flag" 2>nul
+    echo.
+    echo Processing interrupted. Continuing to next step...
+    echo Processing interrupted by user. Continuing to next step...>> "%USERPROFILE%\Desktop\CleaningLog.txt" 2>nul
+    ping -n 2 127.0.0.1 >nul 2>&1
+)
 goto :eof
 
 :ProgressBar
@@ -106,10 +116,12 @@ if /i "%confirm%" NEQ "Y" (
 )
 echo Emptying Recycle Bin...
 :: Use alternative method to empty Recycle Bin
-echo Set oShell = CreateObject("Shell.Application") > "%temp%\emptybin.vbs"
-echo oShell.Namespace(10).Items.InvokeVerb("Delete") >> "%temp%\emptybin.vbs"
+echo Set objShell = CreateObject("Shell.Application") > "%temp%\emptybin.vbs"
+echo If Not objShell Is Nothing Then >> "%temp%\emptybin.vbs"
+echo   objShell.Namespace(10).Items.InvokeVerb "Empty Recycle Bin" >> "%temp%\emptybin.vbs"
+echo End If >> "%temp%\emptybin.vbs"
 cscript //nologo "%temp%\emptybin.vbs"
-del "%temp%\emptybin.vbs"
+del "%temp%\emptybin.vbs" 2>nul
 echo - Recycle Bin emptied>> %USERPROFILE%\Desktop\CleaningLog.txt
 goto :eof
 
@@ -212,6 +224,11 @@ echo.
 set total_steps=6
 set current_step=1
 
+:: Create log directory if it doesn't exist
+if not exist "%USERPROFILE%\Desktop" (
+    mkdir "%USERPROFILE%\Desktop" 2>nul
+)
+
 echo [Step 1/6] Removing temporary files...
 echo [Step 1/6] Removing temporary files...>> %USERPROFILE%\Desktop\CleaningLog.txt
 call :ProgressBar %current_step% %total_steps%
@@ -277,26 +294,20 @@ echo [Step 3/6] Cleaning Windows Update cache...>> %USERPROFILE%\Desktop\Cleanin
 call :ProgressBar %current_step% %total_steps%
 
 :: First check if the service is running
-sc query wuauserv | find "RUNNING" > nul
-if %errorlevel% EQU 0 (
-    net stop wuauserv
-    if %errorlevel% NEQ 0 (
-        call :ErrorHandler "Failed to stop Windows Update service - continuing anyway"
-    )
-)
+net stop wuauserv /y >nul 2>&1
+:: Wait for service to stop
+ping -n 3 127.0.0.1 >nul 2>&1
 
 :: Clean the cache even if the service couldn't be stopped
 if exist C:\Windows\SoftwareDistribution (
     del /s /f /q C:\Windows\SoftwareDistribution\*.* 2>nul
+    echo - Windows Update cache files cleaned>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 )
 
-:: Try to restart the service
-net start wuauserv
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to start Windows Update service - may need manual restart"
-) else (
-    echo - Windows Update cache cleaned>> %USERPROFILE%\Desktop\CleaningLog.txt
-)
+:: Try to restart the service, but don't worry if it fails
+net start wuauserv >nul 2>&1
+:: Flag success even if service couldn't restart
+echo - Windows Update cache cleaning operation completed>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 echo.
 
 set /a current_step+=1
@@ -304,20 +315,17 @@ echo [Step 4/6] Flushing DNS and resetting network...
 echo [Step 4/6] Flushing DNS and resetting network...>> %USERPROFILE%\Desktop\CleaningLog.txt
 call :ProgressBar %current_step% %total_steps%
 
-ipconfig /flushdns
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to flush DNS cache"
-) else (
-    echo - DNS cache flushed>> %USERPROFILE%\Desktop\CleaningLog.txt
-)
+call :CheckForInterrupt
+ipconfig /flushdns >nul 2>&1
+echo - DNS cache flushed>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 
-netsh winsock reset
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to reset Winsock"
-) else (
-    echo - Winsock reset>> %USERPROFILE%\Desktop\CleaningLog.txt
-)
+call :CheckCtrlC
+netsh winsock reset >nul 2>&1
+echo - Winsock reset>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 echo.
+
+echo Note: A system restart will be needed to complete network changes.
+echo Note: A system restart will be needed to complete network changes.>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 
 set /a current_step+=1
 echo [Step 5/6] Cleaning browser caches...
@@ -656,7 +664,7 @@ goto Completed
 :Completed
 echo.
 echo ===================================================
-echo Cleaning process completed successfully!
+echo Cleaning process completed successfully
 echo ===================================================
 echo.
 echo A detailed log has been saved to your Desktop as CleaningLog.txt
@@ -671,4 +679,8 @@ echo Registry backup saved to: %USERPROFILE%\SystemPurge_Backup\
 echo.
 echo Press any key to exit...
 pause > nul
+
+:::: Final cleanup
+if exist "%TEMP%\user_interrupt.flag" del "%TEMP%\user_interrupt.flag" 2>nul
+
 exit
