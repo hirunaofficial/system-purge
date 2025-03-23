@@ -87,9 +87,9 @@ set /a total=%~2
 set /a percent=(progress*100)/total
 set bar=
 
-:: Create progress bar
+:: Create progress bar with standard characters instead of unicode blocks
 for /l %%i in (0,5,%percent%) do (
-    set bar=!bar!█
+    set bar=!bar!#
 )
 
 :: Output progress bar
@@ -105,19 +105,23 @@ if /i "%confirm%" NEQ "Y" (
     goto :eof
 )
 echo Emptying Recycle Bin...
-rd /s /q %systemdrive%\$Recycle.Bin
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to empty Recycle Bin"
-) else (
-    echo - Recycle Bin emptied>> %USERPROFILE%\Desktop\CleaningLog.txt
-)
+:: Use alternative method to empty Recycle Bin
+echo Set oShell = CreateObject("Shell.Application") > "%temp%\emptybin.vbs"
+echo oShell.Namespace(10).Items.InvokeVerb("Delete") >> "%temp%\emptybin.vbs"
+cscript //nologo "%temp%\emptybin.vbs"
+del "%temp%\emptybin.vbs"
+echo - Recycle Bin emptied>> %USERPROFILE%\Desktop\CleaningLog.txt
 goto :eof
 
 :BackupRegistrySettings
 echo Creating registry backup...
 echo Creating registry backup...>> %USERPROFILE%\Desktop\CleaningLog.txt
-set backupFile=%USERPROFILE%\SystemPurge_Backup\registry_backup_%date:~-4,4%%date:~-7,2%%date:~-10,2%_%time:~0,2%%time:~3,2%%time:~6,2%.reg
-reg export HKLM %backupFile% /y
+:: Make sure time format is correct for filenames (spaces can cause issues)
+set datetime=%date:~-4,4%%date:~-7,2%%date:~-10,2%_%time:~0,2%%time:~3,2%%time:~6,2%
+:: Replace any spaces with zeros in the time
+set datetime=%datetime: =0%
+set backupFile=%USERPROFILE%\SystemPurge_Backup\registry_backup_%datetime%.reg
+reg export HKLM "%backupFile%" /y
 if %errorlevel% NEQ 0 (
     call :ErrorHandler "Failed to backup registry"
 ) else (
@@ -213,29 +217,36 @@ echo [Step 1/6] Removing temporary files...>> %USERPROFILE%\Desktop\CleaningLog.
 call :ProgressBar %current_step% %total_steps%
 
 REM Clean Windows Temp
-del /s /f /q C:\Windows\Temp\*.*
+echo Cleaning Windows Temp files...
+:: Skip files in use by other processes
+del /s /f /q C:\Windows\Temp\*.* 2>nul
+:: Don't try to remove the directory itself
 if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to clean Windows Temp files"
+    call :ErrorHandler "Some temp files could not be deleted - they may be in use"
 )
-rmdir /s /q C:\Windows\Temp 2>nul
-mkdir C:\Windows\Temp 2>nul
 echo - Windows Temp files removed>> %USERPROFILE%\Desktop\CleaningLog.txt
 
 REM Clean User Temp
-del /s /f /q %temp%\*.*
+echo Cleaning User Temp files...
+:: Skip files in use by other processes
+del /s /f /q %temp%\*.* 2>nul
+:: Don't try to remove the directory itself
 if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to clean User Temp files"
+    call :ErrorHandler "Some user temp files could not be deleted - they may be in use"
 )
-rmdir /s /q %temp% 2>nul
-mkdir %temp% 2>nul
 echo - User Temp files removed>> %USERPROFILE%\Desktop\CleaningLog.txt
 
 REM Clean Prefetch
-del /s /f /q C:\Windows\Prefetch\*.*
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to clean Prefetch files"
+echo Cleaning Prefetch files...
+if exist C:\Windows\Prefetch (
+    del /s /f /q C:\Windows\Prefetch\*.* 2>nul
+    if %errorlevel% NEQ 0 (
+        call :ErrorHandler "Some prefetch files could not be deleted - they may be in use"
+    ) else (
+        echo - Prefetch files removed>> %USERPROFILE%\Desktop\CleaningLog.txt
+    )
 ) else (
-    echo - Prefetch files removed>> %USERPROFILE%\Desktop\CleaningLog.txt
+    echo - Prefetch directory not found, skipping>> %USERPROFILE%\Desktop\CleaningLog.txt
 )
 echo.
 
@@ -243,7 +254,21 @@ set /a current_step+=1
 echo [Step 2/6] Checking Recycle Bin...
 echo [Step 2/6] Checking Recycle Bin...>> %USERPROFILE%\Desktop\CleaningLog.txt
 call :ProgressBar %current_step% %total_steps%
-call :RecycleBinPrompt
+:: Get confirmation before emptying Recycle Bin
+echo.
+set /p confirm=Are you sure you want to empty the Recycle Bin? (Y/N): 
+if /i "%confirm%" NEQ "Y" (
+    echo Skipping Recycle Bin emptying...
+    echo - Recycle Bin emptying skipped by user>> %USERPROFILE%\Desktop\CleaningLog.txt
+) else (
+    echo Emptying Recycle Bin...
+    :: Use alternative method to empty Recycle Bin
+    echo Set oShell = CreateObject("Shell.Application") > "%temp%\emptybin.vbs"
+    echo oShell.Namespace(10).Items.InvokeVerb("Delete") >> "%temp%\emptybin.vbs"
+    cscript //nologo "%temp%\emptybin.vbs"
+    del "%temp%\emptybin.vbs"
+    echo - Recycle Bin emptied>> %USERPROFILE%\Desktop\CleaningLog.txt
+)
 echo.
 
 set /a current_step+=1
@@ -251,19 +276,24 @@ echo [Step 3/6] Cleaning Windows Update cache...
 echo [Step 3/6] Cleaning Windows Update cache...>> %USERPROFILE%\Desktop\CleaningLog.txt
 call :ProgressBar %current_step% %total_steps%
 
-net stop wuauserv
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to stop Windows Update service"
+:: First check if the service is running
+sc query wuauserv | find "RUNNING" > nul
+if %errorlevel% EQU 0 (
+    net stop wuauserv
+    if %errorlevel% NEQ 0 (
+        call :ErrorHandler "Failed to stop Windows Update service - continuing anyway"
+    )
 )
 
-del /s /f /q C:\Windows\SoftwareDistribution\*.*
-if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to clean Windows Update cache"
+:: Clean the cache even if the service couldn't be stopped
+if exist C:\Windows\SoftwareDistribution (
+    del /s /f /q C:\Windows\SoftwareDistribution\*.* 2>nul
 )
 
+:: Try to restart the service
 net start wuauserv
 if %errorlevel% NEQ 0 (
-    call :ErrorHandler "Failed to start Windows Update service"
+    call :ErrorHandler "Failed to start Windows Update service - may need manual restart"
 ) else (
     echo - Windows Update cache cleaned>> %USERPROFILE%\Desktop\CleaningLog.txt
 )
