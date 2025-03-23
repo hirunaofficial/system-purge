@@ -48,7 +48,7 @@ SystemPurge is a powerful batch script utility designed to clean and optimize yo
 
 ## Installation
 
-1. Download the latest version of `SystemPurge.bat` from the [Releases](https://github.com/hirunagallage/systempurge/releases) page
+1. Download the latest version of `SystemPurge.bat` from the [Releases](https://github.com/hirunagallage/system-purge/releases) page
 2. Save it to a location on your computer
 3. No installation required - it's a portable script!
 
