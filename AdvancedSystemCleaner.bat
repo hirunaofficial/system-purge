@@ -126,8 +126,16 @@ echo - Recycle Bin emptied>> %USERPROFILE%\Desktop\CleaningLog.txt
 goto :eof
 
 :BackupRegistrySettings
+echo.
+set /p create_backup=Would you like to create a registry backup before continuing? (Y/N): 
+if /i "%create_backup%" NEQ "Y" (
+    echo Skipping registry backup as per user request...
+    echo - Registry backup skipped by user request>> "%USERPROFILE%\Desktop\CleaningLog.txt"
+    goto :eof
+)
+
 echo Creating registry backup...
-echo Creating registry backup...>> %USERPROFILE%\Desktop\CleaningLog.txt
+echo Creating registry backup...>> "%USERPROFILE%\Desktop\CleaningLog.txt"
 :: Make sure time format is correct for filenames (spaces can cause issues)
 set datetime=%date:~-4,4%%date:~-7,2%%date:~-10,2%_%time:~0,2%%time:~3,2%%time:~6,2%
 :: Replace any spaces with zeros in the time
@@ -137,7 +145,8 @@ reg export HKLM "%backupFile%" /y
 if %errorlevel% NEQ 0 (
     call :ErrorHandler "Failed to backup registry"
 ) else (
-    echo - Registry backup created at: %backupFile%>> %USERPROFILE%\Desktop\CleaningLog.txt
+    echo - Registry backup created at: %backupFile%>> "%USERPROFILE%\Desktop\CleaningLog.txt"
+    echo Registry backup created successfully at: %backupFile%
 )
 goto :eof
 
